@@ -1,0 +1,9 @@
+run_all*
+run_*
+readme.txt
+mccExcludedFiles.log
+requiredMCRProducts.txt
+cosmo_make_rdm_searchlight
+cosmo_rsa_searchlight
+scripts/
+*egg-info

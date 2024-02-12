@@ -1,0 +1,38 @@
+{
+    "node": {
+        "LongName": "Graph Node",
+        "Description": "Numbered node observed on this trial"
+    },
+    "shape": {
+        "LongName": "Shape",
+        "Description": "Which shape was shown on this trial"
+    },
+    "variation": {
+        "LongName": "Shape Variation",
+        "Description": "Variation (size, angle) of the displayed shape",
+        "Levels": {
+            "0": "Rotation 0 degrees, size 100%",
+            "1": "Rotation 10 degrees, size 95%",
+            "2": "Rotation 20 degrees, size 100%",
+            "3": "Rotation 30 degrees, size 95%",
+            "4": "Rotation 40 degrees, size 100%"
+        }
+    },
+    "correct": {
+        "LongName": "Correct Response",
+        "Description": "Whether the participant responded rorrectly on this trial"
+    },
+    "is_hamiltonian": {
+        "LongName": "Is Hamiltonian",
+        "Description": "If the Modular graph is being used, was this trial part of a Hamiltonian cycle?"
+    },
+    "movement": {
+        "LongName": "Motor Movement",
+        "Description": "Binary representation of the first recorded motor movement. Refers to the buttons, left to right"
+    },
+    "movement_correct": {
+        "LongName": "Correct Motor Movement",
+        "Description": "Binary representation of the required motor movement. Refers to the buttons, left to right"
+    }
+}
+

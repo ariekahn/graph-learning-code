@@ -1,0 +1,10 @@
+{
+    "group": {
+        "LongName": "Graph",
+        "Description": "Which graph was used for a given subject",
+        "Levels": {
+            "modular": "Modular Graph",
+            "lattice": "Laattice Graph"
+        }
+    }
+}

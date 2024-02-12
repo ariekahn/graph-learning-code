@@ -1,0 +1,8 @@
+# Ignore everything in this directory
+*
+# Except this file
+!.gitignore
+!xcp_designs/
+!xcp_designs/**
+!heuristics/
+!heuristics/**

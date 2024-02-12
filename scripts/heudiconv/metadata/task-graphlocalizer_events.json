@@ -1,0 +1,22 @@
+{
+    "node": {
+        "LongName": "Graph Node",
+        "Description": "Numbered node observed on this trial"
+    },
+    "shape": {
+        "LongName": "Shape",
+        "Description": "Which shape was shown on this trial"
+    },
+    "variation": {
+        "LongName": "Shape Variation",
+        "Description": "Variation (size, angle) of the displayed shape",
+        "Levels": {
+            "0": "Rotation 0 degrees, size 100%",
+            "1": "Rotation 10 degrees, size 95%",
+            "2": "Rotation 20 degrees, size 100%",
+            "3": "Rotation 30 degrees, size 95%",
+            "4": "Rotation 40 degrees, size 100%"
+        }
+    }
+}
+

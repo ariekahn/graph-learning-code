@@ -1,0 +1,63 @@
+#!/bin/bash
+# Author: Ari Kahn
+#
+# This will sort the dicom sutructure into subdirectories
+# based on scan names
+#
+# Assumes dicoms are named xxx_seriesno_xxx.dcm
+
+
+#$ -j y
+#$ -l h_vmem=10G,s_vmem=9.5G
+#$ -o /cbica/projects/GraphLearning/project/logs/$JOB_NAME.$JOB_ID
+#$ -m ea
+#$ -M $EMAIL
+
+set -euo pipefail
+
+# Get PROJECT_DIR
+source ../../config.cfg
+DICOM_DIR=$PROJECT_DIR/dicom
+
+get_series_name () {
+    # This is a bit of a mess
+    # Get the name after the tag, then remove trailing whitespace, and replace any other whitespace with underscores
+    # dicom_hdr $1 | grep "ID Series Description" | sed -e 's@^.*ID Series Description//@@' | sed -e 's/[ \t]*$//' | sed -re 's/[ \t]+/_/g'
+
+    # Much simpler:
+    # Just remove whitespace
+    dicom_hinfo -no_name -tag "0008,103e" $1 | sed -re 's/[ \t]+/_/g'
+}
+
+get_series_number() {
+    echo $1 | cut -d "_" -f2 -
+}
+
+do_sort_dicoms() {
+    # Check if we have unsorted dcm files
+    if stat --printf='' *.dcm 2>/dev/null; then
+        for series in *000001.dcm; do
+            series_number=$(get_series_number $series)
+            # Get the last two digits of the number for sorting purposes
+            stripped_series_number=${series_number: -2}
+            series_name=$(get_series_name $series)
+            folder_name=${stripped_series_number}_${series_name}
+            echo $folder_name
+            mkdir -p $folder_name
+            mv *_${series_number}_*.dcm $folder_name
+        done
+    fi
+}
+
+cd $DICOM_DIR
+for subject in *; do
+    cd $subject
+    for session in *; do
+        if [[ -d $session  ]]; then
+            cd $session
+            do_sort_dicoms
+            cd ..
+        fi
+    done
+    cd ..
+done

@@ -1,0 +1,43 @@
+#!/bin/bash
+# Author: Ari Kahn
+#
+# This script loops through a BIDS-like dicom structure and compresses
+# each individual directory
+# e.g. subject/session/scan_1/ -> subject/session/scan_1.tar.gz
+#      subject/session/scan_2/ -> subject/session/scan_2.tar.gz
+#
+#
+# SGE options:
+#$ -j y
+#$ -l h_vmem=10G,s_vmem=9.5G
+#$ -o /cbica/projects/GraphLearning/project/logs/$JOB_NAME.$JOB_ID
+#$ -m ea
+#$ -M $EMAIL
+#$ -pe threaded 8
+
+set -euo pipefail
+
+# Location of our dicoms
+# Get PROJECT_DIR
+source ../../config.cfg
+DICOM_DIR=$PROJECT_DIR/dicom
+
+cd $DICOM_DIR
+for subject in *; do
+    cd $subject
+    for session in *; do
+        if [[ -d $session  ]]; then
+            cd $session
+            for scan in *; do
+                if [[ -d $scan ]]; then
+                    echo "Compressing $subject/$session/$scan"
+                    # Using pigz for faster compression
+                    # Remove the directory afterwards if compression was successful
+                    tar -I pigz -cf ${scan}.tar.gz $scan && rm -rf $scan
+                fi
+            done
+            cd ..
+        fi
+    done
+    cd ..
+done

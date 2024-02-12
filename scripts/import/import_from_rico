@@ -1,0 +1,50 @@
+#!/bin/bash
+# Author: Ari Kahn
+#
+# Copy dicoms over from the scanner
+# Expects a tsv formated as:
+# subject scan_1_folder scan_2_folder
+#
+# This will only copy scans if the target folder doesn't exist
+#
+# However, it doesn't verify anything about the file contents
+
+#$ -j y
+#$ -l h_vmem=10G,s_vmem=9.5G
+#$ -o /cbica/projects/GraphLearning/project/logs/$JOB_NAME.$JOB_ID
+#$ -m ea
+#$ -M $EMAIL
+
+set -euo pipefail
+# Get PROJECT_DIR
+source ../../config.cfg
+REMOTE_DIR=rico.uphs.upenn.edu:/mnt/rtexport/RTexport_Current/
+DICOM_DIR=$PROJECT_DIR/dicom
+CMD=rsync
+FLAGS="-a"
+
+SCAN_LIST=$PROJECT_DIR/extra/scan_list.tsv
+
+# The following construct skips the first line of the tsv
+{
+    read
+    while IFS=$'\t' read -r subject scan_1 scan_2; do
+        target_dir_1="$DICOM_DIR/sub-$subject/ses-1"
+        if [ -d $target_dir_1 ]; then
+            echo "$subject/ses-1 exists"
+        else
+            echo "copying $subject/ses-1"
+            mkdir -p $target_dir_1
+            $CMD $FLAGS "$REMOTE_DIR/$scan_1/*" $target_dir_1
+        fi
+
+        target_dir_2="$DICOM_DIR/sub-$subject/ses-2"
+        if [ -d $target_dir_2 ]; then
+            echo "$subject/ses-2 exists"
+        else
+            echo "copying $subject/ses-2"
+            mkdir -p $target_dir_2
+            $CMD $FLAGS "$REMOTE_DIR/$scan_2/*" $target_dir_2
+        fi
+    done
+}< $SCAN_LIST

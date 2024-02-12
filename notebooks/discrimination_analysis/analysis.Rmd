@@ -1,0 +1,431 @@
+---
+title: "Shape Discrimination Analysis"
+author: "Ari Kahn"
+output: pdf_document
+---
+# Imports
+```{r, echo=FALSE, message=FALSE}
+library(tidyverse)
+library(broom)
+library(jsonlite)
+library(lme4)
+library(lmerTest)
+library(rmatio)
+library(gridExtra)
+```
+# Load Data
+
+Data is all of the format `${subject}_Behavioral-2_Discrimination_${date}.csv`.
+
+```{r, echo=FALSE, message=FALSE}
+# We'll keep a vector of subject names to dates to keep things brief.
+subject_files = c(
+  GRAF_01 = '2021_Aug_22_1736', GRAF_02 = '2021_Aug_24_1201', GRAF_03 = '2021_Aug_24_1258',
+  GRAF_04 = '2021_Aug_24_1408', GRAF_05 = '2021_Aug_24_1502', GRAF_06 = '2021_Aug_24_1607',
+  GRAF_07 = '2021_Aug_25_1603', GRAF_09 = '2021_Sep_01_1125', GRAF_10 = '2021_Sep_02_1534',
+  GRAF_11 = '2021_Sep_02_1511', GRAF_12 = '2021_Sep_03_1347', GRAF_13 = '2021_Sep_02_1622',
+  GRAF_14 = '2021_Sep_06_2135', GRAF_15 = '2021_Sep_08_1400', GRAF_16 = '2021_Sep_08_1232',
+  GRAF_17 = '2021_Sep_08_1451', GRAF_18 = '2021_Sep_08_1554', GRAF_19 = '2021_Sep_14_1259',
+  GRAF_21 = '2021_Sep_14_1603', GRAF_22 = '2021_Sep_16_1018', GRAF_23 = '2021_Sep_16_1526',
+  GRAF_24 = '2021_Sep_16_1248', GRAF_25 = '2021_Sep_16_1408', GRAF_26 = '2021_Sep_21_1244',
+  GRAF_27 = '2021_Sep_21_1528', GRAF_28 = '2021_Sep_21_1636', GRAF_29 = '2021_Sep_22_1137',
+  GRAF_30 = '2021_Sep_23_1350', GRAF_31 = '2021_Sep_23_1248', GRAF_32 = '2021_Sep_23_1319',
+  GRAF_33 = '2021_Sep_28_1407', GRAF_34 = '2021_Sep_30_1258', GRAF_35 = '2021_Sep_30_1408',
+  GRAF_36 = '2021_Sep_30_1501', GRAF_37 = '2021_Sep_30_1402', GRAF_38 = '2021_Sep_30_1553',
+  GRAF_39 = '2021_Oct_05_1600', GRAF_40 = '2021_Oct_05_1455', GRAF_41 = '2021_Oct_07_1255',
+  GRAF_42 = '2021_Oct_07_1354', GRAF_43 = '2021_Oct_12_1331', GRAF_44 = '2021_Oct_12_1457',
+  GRAF_45 = '2021_Oct_12_1554', GRAF_46 = '2021_Oct_12_1542', GRAF_47 = '2021_Oct_13_1155',
+  GRAF_48 = '2021_Oct_14_1254', GRAF_49 = '2021_Oct_14_1400', GRAF_50 = '2021_Oct_14_1553',
+  GRAF_51 = '2021_Oct_14_1556', GRAF_52 = '2021_Oct_14_1505'
+)
+subjects <- names(subject_files)
+```
+
+```{r, echo=FALSE, message=FALSE}
+read_discrimination_data <- function(i) {
+  subject <- subjects[i]
+  subject_file <- subject_files[subject]
+  csv_path <- str_interp('../../data/Discrimination/${subject}/${subject}_Behavioral-2_Discrimination_${subject_file}.csv')
+  # We're dropping a bunch of extra columns to keep things more readable
+  f <- suppressWarnings(suppressMessages(read_csv(csv_path, na='None',
+                col_select=c(-page,-instruction_set,-46,-Fullscreen,-Debug,-instructions.thisRepN,-instructions.thisTrialN,-instructions.thisN,-instructions.thisIndex, -trial.timings.display,-trial.timings.prompt,-trial.timings.response,-ExperimentName,-Session,-SessionID,-SessionName,-date,-psychopyVersion,-Screen,-ExperimentID),
+                show_col_types=FALSE))) %>%
+    rename(subject=`Participant ID`) %>%
+    filter(block.type == "discrimination") %>%  # Exclude all non-trial blocks
+    filter(!grepl("training",block.name))  # Get rid of training blocks
+  
+  # Extract graph and counterbalance info, and append to dataframe
+  subject_info <- fromJSON(str_interp('../../data/Discrimination/${subject}/subject_info.json'))
+  f$graph <- subject_info$`Condition Type`
+  f$counterbalance <- subject_info$`Counterbalance Number`
+  f$subset <- f$counterbalance %% 5
+  f
+}
+
+# Read in each subject's data, and concatenate rows
+df <- bind_rows(lapply(1:length(subjects), read_discrimination_data))
+str_interp('Loaded ${length(subjects)} subjects')
+```
+
+```{r, echo=FALSE, message=FALSE}
+# Re-code strings to factors
+df <-df %>%
+  mutate(across(subject, as.factor)) %>%
+  mutate(across(graph, as.factor)) %>%
+  mutate(across(counterbalance, as.factor)) %>%
+  mutate(across(subset, as.factor))
+
+# Extract block number from block name
+df$block <- as.integer(str_sub(df$block.name, -1, -1))
+
+# Label match/non-match trials
+df$match <- df$shape_left == df$shape_right
+
+# Identify each trial by the set of shapes, ordered
+# This means both 1/2 and 2/1 will map onto 1_2
+df$shape_pair_1 <- str_c(as.character(df$shape_left), "_", as.character(df$shape_right))
+df$shape_pair_2 <- str_c(as.character(df$shape_right), "_", as.character(df$shape_left))
+df <- df %>%
+  mutate(shape_pair_ordered = if_else(shape_left < shape_right, shape_pair_1, shape_pair_2)) %>%
+  mutate(across(shape_pair_ordered, as.factor))
+
+# Using Inverse RT for the analyses
+df$rt.inv <- 1/df$trial.timings.rt
+
+# Hold on to the unfiltered data
+df.full <- df
+
+# Filter to correct, non-match trials
+df <- filter(df, !match)
+df <- filter(df, trial.correct)
+```
+
+Read existing LOC triu data.
+This is the shape-by-shape dissimilarity metric, across both modular and lattice subjects.
+```{r, echo=FALSE, message=FALSE}
+loc_triu_table <- read.mat("../loc_triu.mat")$loc_triu
+loc_vals <- c()
+loc_inds <- c()
+for (i in 1:14) {
+  for (j in (i+1):15) {
+    loc_inds <- c(loc_inds, str_interp("${i-1}_${j-1}"))
+    loc_vals <- c(loc_vals, loc_triu_table[i, j])
+  }
+}
+loc_df <- tibble(shape_pair_ordered=loc_inds, loc_val=loc_vals)
+loc_df$shape_pair_ordered <- as.factor(loc_df$shape_pair_ordered)
+
+as_tibble(loc_triu_table) %>% 
+  rowid_to_column(var="X") %>%
+  gather(key="Y", value="Z", -1) %>%
+  mutate(Y=as.numeric(gsub("V","",Y))) %>%
+  ggplot(aes(X, Y, fill= Z)) + 
+    geom_tile() +
+    labs(x="Shape 1", y="Shape 2", title="LOC RDM") +
+    theme(legend.position="none") +
+    coord_fixed()
+```
+
+Also separate for modular and lattice
+```{r, echo=FALSE, message=FALSE}
+modular_loc_triu_table <- read.mat("../modular_triu.mat")$modular_triu
+modular_loc_vals <- c()
+modular_loc_inds <- c()
+for (i in 1:14) {
+  for (j in (i+1):15) {
+    modular_loc_inds <- c(modular_loc_inds, str_interp("${i-1}_${j-1}"))
+    modular_loc_vals <- c(modular_loc_vals, modular_loc_triu_table[i, j])
+  }
+}
+modular_loc_df <- tibble(shape_pair_ordered=modular_loc_inds, modular_loc_val=modular_loc_vals)
+modular_loc_df$shape_pair_ordered <- as.factor(modular_loc_df$shape_pair_ordered)
+
+lattice_loc_triu_table <- read.mat("../lattice_triu.mat")$lattice_triu
+lattice_loc_vals <- c()
+lattice_loc_inds <- c()
+for (i in 1:14) {
+  for (j in (i+1):15) {
+    lattice_loc_inds <- c(lattice_loc_inds, str_interp("${i-1}_${j-1}"))
+    lattice_loc_vals <- c(lattice_loc_vals, lattice_loc_triu_table[i, j])
+  }
+}
+lattice_loc_df <- tibble(shape_pair_ordered=lattice_loc_inds, lattice_loc_val=lattice_loc_vals)
+lattice_loc_df$shape_pair_ordered <- as.factor(lattice_loc_df$shape_pair_ordered)
+
+as_tibble(modular_loc_triu_table) %>% 
+  rowid_to_column(var="X") %>%
+  gather(key="Y", value="Z", -1) %>%
+  mutate(Y=as.numeric(gsub("V","",Y))) %>%
+  ggplot(aes(X, Y, fill= Z)) + 
+    geom_tile() +
+    labs(x="Shape 1", y="Shape 2", title="Modular LOC RDM") +
+    theme(legend.position="none") +
+    coord_fixed()
+
+as_tibble(lattice_loc_triu_table) %>% 
+  rowid_to_column(var="X") %>%
+  gather(key="Y", value="Z", -1) %>%
+  mutate(Y=as.numeric(gsub("V","",Y))) %>%
+  ggplot(aes(X, Y, fill= Z)) + 
+    geom_tile() +
+    labs(x="Shape 1", y="Shape 2", title="Lattice LOC RDM") +
+    theme(legend.position="none") +
+    coord_fixed()
+```
+And bind the LOC data to the result of the results.
+
+Final dataframe:
+```{r, echo=FALSE, message=FALSE}
+df <- left_join(df, loc_df)
+df$c.loc_val <- df$loc_val - mean(df$loc_val)
+df$z.loc_val <- df$c.loc_val / sd(df$c.loc_val)
+
+df <- left_join(df, modular_loc_df)
+df$c.modular_loc_val <- df$modular_loc_val - mean(df$modular_loc_val)
+df$z.modular_loc_val <- df$c.modular_loc_val / sd(df$c.modular_loc_val)
+
+df <- left_join(df, lattice_loc_df)
+df$c.lattice_loc_val <- df$lattice_loc_val - mean(df$lattice_loc_val)
+df$z.lattice_loc_val <- df$c.lattice_loc_val / sd(df$c.lattice_loc_val)
+
+head(df)
+```
+```{r, echo=FALSE, message=FALSE}
+df.full <- left_join(df.full, loc_df)
+df.full$c.loc_val <- df.full$loc_val - mean(df.full$loc_val)
+df.full$z.loc_val <- df.full$c.loc_val / sd(df.full$c.loc_val)
+
+df.full <- left_join(df.full, modular_loc_df)
+df.full$c.modular_loc_val <- df.full$modular_loc_val - mean(df.full$modular_loc_val)
+df.full$z.modular_loc_val <- df.full$c.modular_loc_val / sd(df.full$c.modular_loc_val)
+
+df.full <- left_join(df.full, lattice_loc_df)
+df.full$c.lattice_loc_val <- df.full$lattice_loc_val - mean(df.full$lattice_loc_val)
+df.full$z.lattice_loc_val <- df.full$c.lattice_loc_val / sd(df.full$c.lattice_loc_val)
+
+head(df.full)
+```
+# Data Verification
+
+Are all shape pairs covered?
+```{r, echo=FALSE}
+p1 <- ggplot(df %>% filter(graph=="modular"), aes(x=shape_left, y=shape_right)) +
+  geom_bin_2d(bins=15) +
+  labs(x="Left Shape", y="Right Shape", title="Modular shape pair counts")
+p2 <- ggplot(df %>% filter(graph=="ringlattice"), aes(x=shape_left, y=shape_right)) +
+  geom_bin_2d(bins=15) +
+  labs(x="Left Shape", y="Right Shape", title="Ring Lattice shape pair counts")
+```
+And make sure that each condition was covered once by condition
+```{r, echo=FALSE}
+x <- df %>%
+  group_by(subject) %>%
+  filter(row_number()==1) %>%
+  ungroup()
+p3 <- ggplot(x, aes(x=counterbalance, y=graph)) +
+  geom_bin_2d()
+```
+
+```{r echo=FALSE}
+grid.arrange(p1, p2, p3, nrow=2)
+```
+
+# Results
+## RT and LOC Correlation
+
+Is the average 1/RT correlated with the LOC dissimilarity across shape pairs?
+
+First plot:
+- Each point is a shape pair
+- Plotting mean 1/R and LOC Dissimilarity values
+- We observe that more dissimilar shapes have lower reaction times (higher 1/RT)
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+df.mean <- df %>%
+  group_by(shape_pair_ordered) %>%
+  summarize(rt.inv.mean = mean(rt.inv), z.loc_val.mean = mean(z.loc_val))
+correlation <- cor.test(df.mean$rt.inv.mean, df.mean$z.loc_val.mean)
+p1 <- ggplot(df.mean, aes(x=z.loc_val.mean, y=rt.inv.mean)) +
+  geom_point() +
+  geom_smooth(method="lm") +
+  labs(x="Z-scored LOC Dissimilarity", y="Mean 1/RT", title=str_glue("A) Correlation between 1/RT and LOC, r={format(correlation$estimate, digits=2)} p={format(correlation$p.value, digits=2)}"))
+```
+
+```{r}
+ cor.test(df.mean$rt.inv.mean, df.mean$z.loc_val.mean)
+```
+
+If we compute the correlation on a per-subject basis,
+nearly all subjects display a positive effect, in most cases very strong.
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+df.mean <- df %>%
+  group_by(subject, shape_pair_ordered) %>%
+  summarize(rt.inv.mean = mean(rt.inv), z.loc_val = mean(z.loc_val)) %>%
+  group_by(subject) %>%
+  summarize(correlation = cor(rt.inv.mean, z.loc_val)) %>%
+  arrange(correlation) %>%
+  mutate(order=1:50)
+#ggplot(df.mean, aes(y=correlation)) + 
+#  geom_boxplot()
+p2 <- ggplot(df.mean %>% arrange(correlation), aes(x=order,y=correlation)) + 
+  geom_line() +
+  labs(x="Subject (Order by value)", y="Correlation", title="B) Correlation between 1/RT and LOC, by subject")
+```
+We find a strong linear relationship between mean of 1/RT (across subjects), and LOC dissimilarity, across all shape pairs.
+
+When this correlation is taken on a per-subject basis (for the behavioral data), against the canonical LOC RDM, almost all subjects show individually high correlations.
+```{r, echo=FALSE}
+p <- grid.arrange(p1, p2, nrow=2)
+ggsave("images/inv_RT_LOC_correlation.pdf", p)
+```
+```{r}
+ggsave("images/rt_vs_loc.pdf", p1, height=5, width=5)
+```
+
+
+## Group LOC Correlation
+We can also separate out the correlations by group.
+```{r}
+df %>%
+  group_by(subject, shape_pair_ordered) %>%
+  summarise(rt.inv.median = median(rt.inv), graph=first(graph), z.loc_val = first(z.loc_val), .groups = 'drop') %>%
+  group_by(subject) %>%
+  summarize(correlation = cor(rt.inv.median, z.loc_val), graph=first(graph), .groups = 'drop') %>%
+  group_by(graph) %>%
+  summarize(correlation.mean = mean(correlation))
+```
+We find roughly similar distributions for correlations between subjects in the modular and lattice behavioral groups
+
+```{r}
+df %>%
+  group_by(subject, shape_pair_ordered) %>%
+  summarise(rt.inv.median = median(rt.inv), graph=first(graph), z.loc_val = first(z.loc_val), .groups = 'drop') %>%
+  group_by(subject) %>%
+  summarize(correlation = cor(rt.inv.median, z.loc_val), graph=first(graph), .groups = 'drop') %>%
+  ggplot(aes(x=correlation, color=graph)) + geom_density()
+```
+
+## Group Differences
+```{r}
+df.median <- df %>%
+  group_by(subject) %>%
+  summarise(rt.inv.median = median(rt.inv), graph=first(graph), rt.inv.mean = mean(rt.inv))
+
+df.median %>%
+  group_by(graph) %>%
+  summarize(rt.inv.median.mean = mean(rt.inv.median), rt.inv.median.sem = sd(rt.inv.median) / sqrt(length(rt.inv.median)))
+```
+
+```{r}
+x <- df %>%
+  group_by(graph) %>%
+  summarise(rt.inv.median = median(rt.inv))
+x
+```
+
+```{r}
+rt.inv.median.modular <- (df.median %>% filter(graph == "modular"))$rt.inv.median
+rt.inv.median.lattice <- (df.median %>% filter(graph == "ringlattice"))$rt.inv.median
+t.test(rt.inv.median.modular, rt.inv.median.lattice)
+```
+
+
+## Basic Linear Model
+
+First analysis: Purely linear model.
+
+We're averaging across subjects for our behavioral RT, first.
+
+Note that we can't include both `loc_val` and `shape_pair_ordered`, since here
+the effect for `shape_pair_ordered` already allows a separate fit for each shape,
+and we end up with collinearity. Since we don't care about `loc_val` here, don't think
+this is really a problem, though I've included both. `shape_pair_ordered` provides a
+slightly better fit, but the huge number of parameters result in a higher AIC, though
+not a 'sigificant' AIC difference (of <2)
+
+We find graph type to be significant in either case, with decreased reaction times
+(higher 1/RT) for the ring lattice.
+
+```{r}
+df.mean <- df %>%
+  group_by(shape_pair_ordered, graph) %>%
+  summarize(rt.inv.mean = mean(rt.inv), z.loc_val.mean = mean(z.loc_val))
+m1 <- lm(rt.inv.mean ~ graph + z.loc_val.mean, df.mean)
+summary(m1)
+AIC(m1)
+```
+```{r}
+df.mean <- df %>%
+  group_by(shape_pair_ordered, graph) %>%
+  summarize(rt.inv.mean = mean(rt.inv), z.loc_val.mean = mean(z.loc_val))
+m2 <- lm(rt.inv.mean ~ graph + shape_pair_ordered, df.mean)
+summary(m2)
+AIC(m2)
+```
+
+## Mixed Effects Model
+
+Here we're modeling 1/RT to be predicted by `graph`, LOC values, and random effects
+for each subject, and each shape pair.
+
+I _think_ this is the correct model to be using, but would appreciate a critical eye.
+
+However, it doesn't appear that graph effects are significant here, with presumably
+a richer dataset allowing us to fit all repetitions of a shape pair per subject.
+
+```{r}
+m3 <- lmer(rt.inv ~ graph + z.loc_val + (1 | subject) + (1 | shape_pair_ordered), df)
+summary(m3)
+```
+
+```{r}
+m4 <- lmer(rt.inv ~ graph * z.loc_val + (1 | subject) + (1 | shape_pair_ordered), df)
+summary(m4)
+```
+
+# Figure 5 Exploration
+
+Inter-pattern Distance versus Intra-pattern distance
+```{r}
+df.full %>%
+  filter(match) %>%
+  filter(trial.correct) %>%
+  group_by(subject, graph) %>%
+  summarize(mean.rt.inv = mean(rt.inv)) %>%
+  group_by(graph) %>%
+  summarize(mean.rt.inv = mean(mean.rt.inv))
+```
+```{r}
+df.full %>%
+  filter(match) %>%
+  group_by(graph) %>%
+  summarize(mean.correct= mean(trial.correct))
+```
+
+```{r}
+df.full %>%
+  filter(!match) %>%
+  filter(trial.correct) %>%
+  group_by(graph) %>%
+  summarize(mean.rt.inv = mean(rt.inv))
+```
+
+```{r}
+m5 <- lmer(rt.inv ~ graph*z.modular_loc_val + graph:z.lattice_loc_val + (1 | subject) + (1 | shape_pair_ordered), df)
+summary(m5)
+```
+```{r}
+df.full.match <-
+  df.full %>%
+  filter(match) %>%
+  filter(trial.correct)
+m6 <- lmer(rt.inv ~ graph + (1 | subject) + (1 | shape_pair_ordered), df.full.match)
+summary(m6)
+```
+
+```{r}
+df.full.correct <-
+  df.full %>%
+  filter(trial.correct)
+m7 <- lmer(rt.inv ~ graph*match + (1 | subject) + (1 | shape_pair_ordered), df.full.correct)
+summary(m7)
+```
